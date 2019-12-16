@@ -16,9 +16,11 @@
  */
 package com.alipay.sofa.jraft.util;
 
-import static org.junit.Assert.assertEquals;
+import java.nio.ByteBuffer;
 
 import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
 
 public class CrcUtilTest {
 
@@ -29,5 +31,13 @@ public class CrcUtilTest {
         assertEquals(c, CrcUtil.crc64(bs));
         assertEquals(c, CrcUtil.crc64(bs));
         assertEquals(c, CrcUtil.crc64(bs, 0, bs.length));
+
+        ByteBuffer buf = ByteBuffer.wrap(bs);
+        assertEquals(c, CrcUtil.crc64(buf));
+
+        buf = ByteBuffer.allocateDirect(bs.length);
+        buf.put(bs);
+        buf.flip();
+        assertEquals(c, CrcUtil.crc64(buf));
     }
 }

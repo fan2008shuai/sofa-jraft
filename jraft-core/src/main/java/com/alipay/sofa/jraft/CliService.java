@@ -17,6 +17,8 @@
 package com.alipay.sofa.jraft;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import com.alipay.sofa.jraft.conf.Configuration;
 import com.alipay.sofa.jraft.entity.PeerId;
@@ -74,6 +76,45 @@ public interface CliService extends Lifecycle<CliOptions> {
     Status resetPeer(final String groupId, final PeerId peer, final Configuration newPeers);
 
     /**
+     * Add some new learners into the replicating group which consists of |conf|.
+     * return OK status when success.
+     *
+     * @param groupId  the raft group id
+     * @param conf     current configuration
+     * @param learners learner peers to add
+     * @return operation status
+     * @since 1.3.0
+     *
+     */
+    Status addLearners(final String groupId, final Configuration conf, final List<PeerId> learners);
+
+    /**
+     * Remove some learners from the replicating group which consists of |conf|.
+     * return OK status when success.
+     *
+     * @param groupId  the raft group id
+     * @param conf     current configuration
+     * @param learners learner peers to remove
+     * @return operation status
+     * @since 1.3.0
+     *
+     */
+    Status removeLearners(final String groupId, final Configuration conf, final List<PeerId> learners);
+
+    /**
+     * Update learners set in the replicating group which consists of |conf|.
+     * return OK status when success.
+     *
+     * @param groupId  the raft group id
+     * @param conf     current configuration
+     * @param learners learner peers to set
+     * @return operation status
+     * @since 1.3.0
+     *
+     */
+    Status resetLearners(final String groupId, final Configuration conf, final List<PeerId> learners);
+
+    /**
      * Transfer the leader of the replication group to the target peer
      *
      * @param groupId the raft group id
@@ -118,4 +159,34 @@ public interface CliService extends Lifecycle<CliOptions> {
      * @return all alive peers of the replication group
      */
     List<PeerId> getAlivePeers(final String groupId, final Configuration conf);
+
+    /**
+     * Ask all learners of the replication group.
+     *
+     * @param groupId the raft group id
+     * @param conf    target peers configuration
+     * @return all learners of the replication group
+     * @since 1.3.0
+     */
+    List<PeerId> getLearners(final String groupId, final Configuration conf);
+
+    /**
+     * Ask all alive learners of the replication group.
+     *
+     * @param groupId the raft group id
+     * @param conf    target peers configuration
+     * @return all alive learners of the replication group
+     */
+    List<PeerId> getAliveLearners(final String groupId, final Configuration conf);
+
+    /**
+     * Balance the number of leaders.
+     *
+     * @param balanceGroupIds   all raft group ids to balance
+     * @param conf              configuration of all nodes
+     * @param balancedLeaderIds the result of all balanced leader ids
+     * @return operation status
+     */
+    Status rebalance(final Set<String> balanceGroupIds, final Configuration conf,
+                     final Map<String, PeerId> balancedLeaderIds);
 }

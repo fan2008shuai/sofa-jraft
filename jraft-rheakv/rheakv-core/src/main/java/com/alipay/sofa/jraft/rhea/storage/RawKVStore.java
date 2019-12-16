@@ -76,6 +76,11 @@ public interface RawKVStore {
     void multiGet(final List<byte[]> keys, final boolean readOnlySafe, final KVStoreClosure closure);
 
     /**
+     * Returns whether DB contains the specified input key {@code key}.
+     */
+    void containsKey(final byte[] key, final KVStoreClosure closure);
+
+    /**
      * Equivalent to {@code scan(startKey, endKey, Integer.MAX_VALUE, closure)}.
      */
     void scan(final byte[] startKey, final byte[] endKey, final KVStoreClosure closure);
@@ -139,6 +144,12 @@ public interface RawKVStore {
     void getAndPut(final byte[] key, final byte[] value, final KVStoreClosure closure);
 
     /**
+     * Atomically sets the value to the given updated value
+     * if the current value equal (compare bytes) the expected value.
+     */
+    void compareAndPut(final byte[] key, final byte[] expect, final byte[] update, final KVStoreClosure closure);
+
+    /**
      * Add merge operand for key/value pair.
      *
      *  <pre>
@@ -185,6 +196,11 @@ public interface RawKVStore {
      * Delete all data in the key range of [startKey, endKey).
      */
     void deleteRange(final byte[] startKey, final byte[] endKey, final KVStoreClosure closure);
+
+    /**
+     * Delete data by the {@code keys} in batch.
+     */
+    void delete(final List<byte[]> keys, final KVStoreClosure closure);
 
     /**
      * The {@code nodeExecutor} will be triggered when each node's

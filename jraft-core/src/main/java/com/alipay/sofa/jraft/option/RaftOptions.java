@@ -16,6 +16,8 @@
  */
 package com.alipay.sofa.jraft.option;
 
+import com.alipay.sofa.jraft.util.Copiable;
+
 /**
  * Raft options.
  *
@@ -23,7 +25,7 @@ package com.alipay.sofa.jraft.option;
  *
  * 2018-Apr-03 4:38:40 PM
  */
-public class RaftOptions {
+public class RaftOptions implements Copiable<RaftOptions> {
 
     /** Maximum of block size per RPC */
     private int            maxByteCountPerRpc                   = 128 * 1024;
@@ -45,6 +47,8 @@ public class RaftOptions {
     private boolean        sync                                 = true;
     /** Sync log meta, snapshot meta and raft meta */
     private boolean        syncMeta                             = false;
+    /** Statistics to analyze the performance of db */
+    private boolean        openStatistics                       = true;
     /** Whether to enable replicator pipeline. */
     private boolean        replicatorPipeline                   = true;
     /** The maximum replicator pipeline in-flight requests/responses, only valid when enable replicator pipeline. */
@@ -76,6 +80,19 @@ public class RaftOptions {
      * in that case.
      */
     private ReadOnlyOption readOnlyOptions                      = ReadOnlyOption.ReadOnlySafe;
+    /**
+     * Candidate steps down when election reaching timeout, default is true(enabled).
+     * @since 1.3.0
+     */
+    private boolean        stepDownWhenVoteTimedout             = true;
+
+    public boolean isStepDownWhenVoteTimedout() {
+        return this.stepDownWhenVoteTimedout;
+    }
+
+    public void setStepDownWhenVoteTimedout(final boolean stepDownWhenVoteTimeout) {
+        this.stepDownWhenVoteTimedout = stepDownWhenVoteTimeout;
+    }
 
     public int getDisruptorPublishEventWaitTimeoutSecs() {
         return this.disruptorPublishEventWaitTimeoutSecs;
@@ -205,6 +222,37 @@ public class RaftOptions {
         this.syncMeta = syncMeta;
     }
 
+    public boolean isOpenStatistics() {
+        return this.openStatistics;
+    }
+
+    public void setOpenStatistics(final boolean openStatistics) {
+        this.openStatistics = openStatistics;
+    }
+
+    @Override
+    public RaftOptions copy() {
+        final RaftOptions raftOptions = new RaftOptions();
+        raftOptions.setMaxByteCountPerRpc(this.maxByteCountPerRpc);
+        raftOptions.setFileCheckHole(this.fileCheckHole);
+        raftOptions.setMaxEntriesSize(this.maxEntriesSize);
+        raftOptions.setMaxBodySize(this.maxBodySize);
+        raftOptions.setMaxAppendBufferSize(this.maxAppendBufferSize);
+        raftOptions.setMaxElectionDelayMs(this.maxElectionDelayMs);
+        raftOptions.setElectionHeartbeatFactor(this.electionHeartbeatFactor);
+        raftOptions.setApplyBatch(this.applyBatch);
+        raftOptions.setSync(this.sync);
+        raftOptions.setSyncMeta(this.syncMeta);
+        raftOptions.setOpenStatistics(this.openStatistics);
+        raftOptions.setReplicatorPipeline(this.replicatorPipeline);
+        raftOptions.setMaxReplicatorInflightMsgs(this.maxReplicatorInflightMsgs);
+        raftOptions.setDisruptorBufferSize(this.disruptorBufferSize);
+        raftOptions.setDisruptorPublishEventWaitTimeoutSecs(this.disruptorPublishEventWaitTimeoutSecs);
+        raftOptions.setEnableLogEntryChecksum(this.enableLogEntryChecksum);
+        raftOptions.setReadOnlyOptions(this.readOnlyOptions);
+        return raftOptions;
+    }
+
     @Override
     public String toString() {
         return "RaftOptions{" + "maxByteCountPerRpc=" + this.maxByteCountPerRpc + ", fileCheckHole="
@@ -212,8 +260,10 @@ public class RaftOptions {
                + ", maxAppendBufferSize=" + this.maxAppendBufferSize + ", maxElectionDelayMs="
                + this.maxElectionDelayMs + ", electionHeartbeatFactor=" + this.electionHeartbeatFactor
                + ", applyBatch=" + this.applyBatch + ", sync=" + this.sync + ", syncMeta=" + this.syncMeta
-               + ", replicatorPipeline=" + this.replicatorPipeline + ", maxReplicatorInflightMsgs="
-               + this.maxReplicatorInflightMsgs + ", disruptorBufferSize=" + this.disruptorBufferSize
+               + ", openStatistics=" + this.openStatistics + ", replicatorPipeline=" + this.replicatorPipeline
+               + ", maxReplicatorInflightMsgs=" + this.maxReplicatorInflightMsgs + ", disruptorBufferSize="
+               + this.disruptorBufferSize + ", disruptorPublishEventWaitTimeoutSecs="
+               + this.disruptorPublishEventWaitTimeoutSecs + ", enableLogEntryChecksum=" + this.enableLogEntryChecksum
                + ", readOnlyOptions=" + this.readOnlyOptions + '}';
     }
 }

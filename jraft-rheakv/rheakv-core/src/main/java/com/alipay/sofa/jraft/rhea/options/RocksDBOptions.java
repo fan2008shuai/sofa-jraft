@@ -29,8 +29,13 @@ public class RocksDBOptions {
     private boolean sync                              = false;
     // For the same reason(See the comment of ‘sync’ field), we also
     // don't need WAL, which can improve performance.
+    //
+    // If `sync` is true, `disableWAL` must be set false
     private boolean disableWAL                        = true;
+    // https://github.com/facebook/rocksdb/wiki/Checkpoints
     private boolean fastSnapshot                      = false;
+    private boolean asyncSnapshot                     = false;
+    // Statistics to analyze the performance of db
     private boolean openStatisticsCollector           = true;
     private long    statisticsCallbackIntervalSeconds = 0;
     private String  dbPath;
@@ -75,6 +80,14 @@ public class RocksDBOptions {
         this.fastSnapshot = fastSnapshot;
     }
 
+    public boolean isAsyncSnapshot() {
+        return asyncSnapshot;
+    }
+
+    public void setAsyncSnapshot(boolean asyncSnapshot) {
+        this.asyncSnapshot = asyncSnapshot;
+    }
+
     public boolean isOpenStatisticsCollector() {
         return openStatisticsCollector;
     }
@@ -101,8 +114,9 @@ public class RocksDBOptions {
 
     @Override
     public String toString() {
-        return "RocksDBOptions{" + "sync=" + sync + ", fastSnapshot=" + fastSnapshot + ", openStatisticsCollector="
-               + openStatisticsCollector + ", statisticsCallbackIntervalSeconds=" + statisticsCallbackIntervalSeconds
-               + ", dbPath='" + dbPath + '\'' + '}';
+        return "RocksDBOptions{" + "sync=" + sync + ", disableWAL=" + disableWAL + ", fastSnapshot=" + fastSnapshot
+               + ", asyncSnapshot=" + asyncSnapshot + ", openStatisticsCollector=" + openStatisticsCollector
+               + ", statisticsCallbackIntervalSeconds=" + statisticsCallbackIntervalSeconds + ", dbPath='" + dbPath
+               + '\'' + '}';
     }
 }

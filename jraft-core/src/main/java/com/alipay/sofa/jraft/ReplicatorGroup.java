@@ -20,11 +20,13 @@ import java.util.List;
 
 import com.alipay.sofa.jraft.closure.CatchUpClosure;
 import com.alipay.sofa.jraft.conf.ConfigurationEntry;
+import com.alipay.sofa.jraft.core.ReplicatorType;
 import com.alipay.sofa.jraft.entity.NodeId;
 import com.alipay.sofa.jraft.entity.PeerId;
 import com.alipay.sofa.jraft.option.ReplicatorGroupOptions;
 import com.alipay.sofa.jraft.rpc.RpcRequests.AppendEntriesResponse;
 import com.alipay.sofa.jraft.rpc.RpcResponseClosure;
+import com.alipay.sofa.jraft.util.Describer;
 import com.alipay.sofa.jraft.util.ThreadId;
 
 /**
@@ -34,7 +36,7 @@ import com.alipay.sofa.jraft.util.ThreadId;
  *
  * 2018-Apr-08 5:35:26 PM
  */
-public interface ReplicatorGroup {
+public interface ReplicatorGroup extends Describer {
     /**
      * Init the replicator group.
      *
@@ -45,6 +47,15 @@ public interface ReplicatorGroup {
     boolean init(final NodeId nodeId, final ReplicatorGroupOptions opts);
 
     /**
+     * Adds a replicator for follower({@link ReplicatorType#Follower}).
+     * @see #addReplicator(PeerId, ReplicatorType)
+     *
+     * @param peer target peer
+     * @return true on success
+     */
+    boolean addReplicator(final PeerId peer);
+
+    /**
      * Add a replicator attached with |peer|
      * will be a notification when the replicator catches up according to the
      * arguments.
@@ -52,10 +63,11 @@ public interface ReplicatorGroup {
      * immediately, and might call Node#stepDown which might have race with
      * the caller, you should deal with this situation.
      *
-     * @param peer target peer
+     * @param peer           target peer
+     * @param replicatorType replicator type
      * @return true on success
      */
-    boolean addReplicator(final PeerId peer);
+    boolean addReplicator(final PeerId peer, ReplicatorType replicatorType);
 
     /**
      * Send heartbeat to a peer.

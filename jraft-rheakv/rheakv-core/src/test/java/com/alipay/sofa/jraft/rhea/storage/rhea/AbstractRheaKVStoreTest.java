@@ -27,7 +27,9 @@ import java.util.concurrent.TimeUnit;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestName;
 
 import com.alipay.sofa.jraft.JRaftUtils;
 import com.alipay.sofa.jraft.Status;
@@ -52,6 +54,7 @@ import static com.alipay.sofa.jraft.rhea.KeyValueTool.makeKey;
 import static com.alipay.sofa.jraft.rhea.KeyValueTool.makeValue;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -65,14 +68,20 @@ public abstract class AbstractRheaKVStoreTest extends RheaKVTestCluster {
 
     public abstract StorageType getStorageType();
 
+    @Rule
+    public TestName testName = new TestName();
+
     @Before
     public void setup() throws Exception {
+        System.out.println(">>>>>>>>>>>>>>> Start test method: " + this.testName.getMethodName());
         super.start(getStorageType());
     }
 
     @After
     public void tearDown() throws Exception {
+        System.out.println(">>>>>>>>>>>>>>> Stopping test method: " + this.testName.getMethodName());
         super.shutdown();
+        System.out.println(">>>>>>>>>>>>>>> End test method: " + this.testName.getMethodName());
     }
 
     private void checkRegion(RheaKVStore store, byte[] key, long expectedRegionId) {
@@ -181,6 +190,46 @@ public abstract class AbstractRheaKVStoreTest extends RheaKVTestCluster {
     @Test
     public void multiGetByFollowerTest() {
         multiGetTest(getRandomFollowerStore());
+    }
+
+    /**
+     * Test method: {@link RheaKVStore#containsKey(byte[])}
+     */
+    private void containsKeyTest(RheaKVStore store) {
+        // regions: 1 -> [null, g), 2 -> [g, null)
+        byte[] key = makeKey("a_contains_key_test");
+        checkRegion(store, key, 1);
+        Boolean isContains = store.bContainsKey(key);
+        assertFalse(isContains);
+        byte[] value = makeValue("a_contains_key_test_value");
+        store.bPut(key, value);
+        assertTrue(store.bContainsKey(key));
+
+        key = makeKey("h_contains_key_test");
+        checkRegion(store, key, 2);
+        isContains = store.bContainsKey(key);
+        assertFalse(isContains);
+        value = makeValue("h_contains_key_test_value");
+        store.bPut(key, value);
+        assertTrue(store.bContainsKey(key));
+
+        key = makeKey("z_contains_key_test");
+        checkRegion(store, key, 2);
+        isContains = store.bContainsKey(key);
+        assertFalse(isContains);
+        value = makeValue("z_contains_key_test_value");
+        store.bPut(key, value);
+        assertTrue(store.bContainsKey(key));
+    }
+
+    @Test
+    public void containsKeyByLeaderTest() {
+        containsKeyTest(getRandomLeaderStore());
+    }
+
+    @Test
+    public void containsKeyByFollowerTest() {
+        containsKeyTest(getRandomFollowerStore());
     }
 
     /**
@@ -511,7 +560,34 @@ public abstract class AbstractRheaKVStoreTest extends RheaKVTestCluster {
     }
 
     /**
-     * Test method: {@link RheaKVStore#getAndPut(byte[], byte[])}
+     * Test method: {@link RheaKVStore#compareAndPut(byte[], byte[], byte[])}
+     */
+    private void compareAndPutTest(RheaKVStore store) {
+        byte[] key = makeKey("put_test");
+        checkRegion(store, key, 2);
+        byte[] value = makeValue("put_test_value");
+        store.bPut(key, value);
+
+        byte[] update = makeValue("put_test_update");
+        assertTrue(store.bCompareAndPut(key, value, update));
+        byte[] newValue = store.bGet(key);
+        assertArrayEquals(update, newValue);
+
+        assertFalse(store.bCompareAndPut(key, value, update));
+    }
+
+    @Test
+    public void compareAndPutByLeaderTest() {
+        compareAndPutTest(getRandomLeaderStore());
+    }
+
+    @Test
+    public void compareAndPutByFollowerTest() {
+        compareAndPutTest(getRandomFollowerStore());
+    }
+
+    /**
+     * Test method: {@link RheaKVStore#merge(String, String)}
      */
     private void mergeTest(RheaKVStore store) {
         // regions: 1 -> [null, g), 2 -> [g, t), 3 -> [t, null)
@@ -676,6 +752,54 @@ public abstract class AbstractRheaKVStoreTest extends RheaKVTestCluster {
     @Test
     public void deleteRangeByFollowerTest() {
         deleteRangeTest(getRandomFollowerStore());
+    }
+
+    /**
+     * Test method: {@link RheaKVStore#delete(List)}
+     */
+    private void deleteListTest(RheaKVStore store) {
+        List<KVEntry> entries1 = Lists.newArrayList();
+        List<byte[]> keys1 = Lists.newArrayList();
+        for (int i = 0; i < 3; i++) {
+            byte[] key = makeKey("batch_del_test_key" + i);
+            checkRegion(store, key, 1);
+            entries1.add(new KVEntry(key, makeValue("batch_del_test_value" + i)));
+            keys1.add(key);
+        }
+        store.bPut(entries1);
+        store.bDelete(keys1);
+        List<KVEntry> entries2 = Lists.newArrayList();
+        List<byte[]> keys2 = Lists.newArrayList();
+        for (int i = 0; i < 10; i++) {
+            byte[] key = makeKey("g_batch_del_test_key" + i);
+            checkRegion(store, key, 2);
+            entries2.add(new KVEntry(key, makeValue("batch_del_test_value" + i)));
+            keys2.add(key);
+        }
+        store.bPut(entries2);
+        store.bDelete(keys2);
+        List<KVEntry> foundList = store.bScan(makeKey("batch_del_test_key"), makeKey("batch_del_test_key" + 99));
+        assertEquals(0, foundList.size());
+        for (int i = 0; i < keys1.size(); i++) {
+            byte[] value = store.bGet(keys1.get(i));
+            assertNull(value);
+        }
+        foundList = store.bScan(makeKey("g_batch_del_test_key"), makeKey("g_batch_put_test_key" + 99));
+        assertEquals(0, foundList.size());
+        for (int i = 0; i < keys2.size(); i++) {
+            byte[] value = store.bGet(keys2.get(i));
+            assertNull(value);
+        }
+    }
+
+    @Test
+    public void deleteListByLeaderTest() {
+        deleteListTest(getRandomLeaderStore());
+    }
+
+    @Test
+    public void deleteListByFollowerTest() {
+        deleteListTest(getRandomFollowerStore());
     }
 
     /**

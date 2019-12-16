@@ -36,6 +36,7 @@ import com.alipay.sofa.jraft.closure.TaskClosure;
 import com.alipay.sofa.jraft.conf.Configuration;
 import com.alipay.sofa.jraft.conf.ConfigurationEntry;
 import com.alipay.sofa.jraft.entity.EnumOutter;
+import com.alipay.sofa.jraft.entity.EnumOutter.ErrorType;
 import com.alipay.sofa.jraft.entity.LeaderChangeContext;
 import com.alipay.sofa.jraft.entity.LogEntry;
 import com.alipay.sofa.jraft.entity.LogId;
@@ -48,6 +49,7 @@ import com.alipay.sofa.jraft.storage.LogManager;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotReader;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotWriter;
 import com.alipay.sofa.jraft.util.DisruptorBuilder;
+import com.alipay.sofa.jraft.util.DisruptorMetricSet;
 import com.alipay.sofa.jraft.util.LogExceptionHandler;
 import com.alipay.sofa.jraft.util.NamedThreadFactory;
 import com.alipay.sofa.jraft.util.OnlyForTest;
@@ -184,14 +186,17 @@ public class FSMCallerImpl implements FSMCaller {
         this.disruptor = DisruptorBuilder.<ApplyTask> newInstance() //
             .setEventFactory(new ApplyTaskFactory()) //
             .setRingBufferSize(opts.getDisruptorBufferSize()) //
-            .setThreadFactory(new NamedThreadFactory("JRaft-FSMCaller-disruptor-", true)) //
+            .setThreadFactory(new NamedThreadFactory("JRaft-FSMCaller-Disruptor-", true)) //
             .setProducerType(ProducerType.MULTI) //
             .setWaitStrategy(new BlockingWaitStrategy()) //
             .build();
         this.disruptor.handleEventsWith(new ApplyTaskHandler());
         this.disruptor.setDefaultExceptionHandler(new LogExceptionHandler<Object>(getClass().getSimpleName()));
-        this.disruptor.start();
-        this.taskQueue = this.disruptor.getRingBuffer();
+        this.taskQueue = this.disruptor.start();
+        if (this.nodeMetrics.getMetricRegistry() != null) {
+            this.nodeMetrics.getMetricRegistry().register("jraft-fsm-caller-disruptor",
+                new DisruptorMetricSet(this.taskQueue));
+        }
         this.error = new RaftException(EnumOutter.ErrorType.ERROR_TYPE_NONE);
         LOG.info("Starts FSMCaller successfully.");
         return true;
@@ -206,12 +211,12 @@ public class FSMCallerImpl implements FSMCaller {
 
         if (this.taskQueue != null) {
             final CountDownLatch latch = new CountDownLatch(1);
-            enqueueTask((task, sequence) -> {
+            this.shutdownLatch = latch;
+            Utils.runInThread(() -> this.taskQueue.publishEvent((task, sequence) -> {
                 task.reset();
                 task.type = TaskType.SHUTDOWN;
                 task.shutdownLatch = latch;
-            });
-            this.shutdownLatch = latch;
+            }));
         }
         doShutdown();
     }
@@ -227,7 +232,11 @@ public class FSMCallerImpl implements FSMCaller {
             LOG.warn("FSMCaller is stopped, can not apply new task.");
             return false;
         }
-        this.taskQueue.publishEvent(tpl);
+        if (!this.taskQueue.tryPublishEvent(tpl)) {
+            onError(new RaftException(ErrorType.ERROR_TYPE_STATE_MACHINE, new Status(RaftError.EBUSY,
+                "FSMCaller is overload.")));
+            return false;
+        }
         return true;
     }
 
@@ -350,6 +359,10 @@ public class FSMCallerImpl implements FSMCaller {
         if (this.shutdownLatch != null) {
             this.shutdownLatch.await();
             this.disruptor.shutdown();
+            if (this.afterShutdown != null) {
+                this.afterShutdown.run(Status.OK());
+                this.afterShutdown = null;
+            }
             this.shutdownLatch = null;
         }
     }
@@ -443,10 +456,6 @@ public class FSMCallerImpl implements FSMCaller {
         if (this.fsm != null) {
             this.fsm.onShutdown();
         }
-        if (this.afterShutdown != null) {
-            this.afterShutdown.run(Status.OK());
-            this.afterShutdown = null;
-        }
     }
 
     private void notifyLastAppliedIndexUpdated(final long lastAppliedIndex) {
@@ -506,10 +515,10 @@ public class FSMCallerImpl implements FSMCaller {
             final long lastIndex = iterImpl.getIndex() - 1;
             final long lastTerm = this.logManager.getTerm(lastIndex);
             final LogId lastAppliedId = new LogId(lastIndex, lastTerm);
-            this.lastAppliedIndex.set(committedIndex);
+            this.lastAppliedIndex.set(lastIndex);
             this.lastAppliedTerm = lastTerm;
             this.logManager.setAppliedId(lastAppliedId);
-            notifyLastAppliedIndexUpdated(committedIndex);
+            notifyLastAppliedIndexUpdated(lastIndex);
         } finally {
             this.nodeMetrics.recordLatency("fsm-commit", Utils.monotonicMs() - startMs);
         }
@@ -555,9 +564,15 @@ public class FSMCallerImpl implements FSMCaller {
         for (final PeerId peer : confEntry.getConf()) {
             metaBuilder.addPeers(peer.toString());
         }
+        for (final PeerId peer : confEntry.getConf().getLearners()) {
+            metaBuilder.addLearners(peer.toString());
+        }
         if (confEntry.getOldConf() != null) {
             for (final PeerId peer : confEntry.getOldConf()) {
                 metaBuilder.addOldPeers(peer.toString());
+            }
+            for (final PeerId peer : confEntry.getOldConf().getLearners()) {
+                metaBuilder.addOldLearners(peer.toString());
             }
         }
         final SnapshotWriter writer = done.start(metaBuilder.build());
@@ -704,5 +719,11 @@ public class FSMCallerImpl implements FSMCaller {
             }
         }
         return true;
+    }
+
+    @Override
+    public void describe(final Printer out) {
+        out.print("  ") //
+            .println(toString());
     }
 }

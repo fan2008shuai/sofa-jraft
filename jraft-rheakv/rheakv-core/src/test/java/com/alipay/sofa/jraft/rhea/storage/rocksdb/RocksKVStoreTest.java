@@ -17,7 +17,6 @@
 package com.alipay.sofa.jraft.rhea.storage.rocksdb;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
@@ -26,23 +25,30 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.zip.ZipOutputStream;
 
 import org.apache.commons.io.FileUtils;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import com.alipay.sofa.jraft.Closure;
 import com.alipay.sofa.jraft.Status;
 import com.alipay.sofa.jraft.entity.LocalFileMetaOutter.LocalFileMeta;
+import com.alipay.sofa.jraft.rhea.StoreEngineHelper;
 import com.alipay.sofa.jraft.rhea.metadata.Region;
 import com.alipay.sofa.jraft.rhea.options.RocksDBOptions;
 import com.alipay.sofa.jraft.rhea.storage.BaseKVStoreClosure;
 import com.alipay.sofa.jraft.rhea.storage.KVEntry;
 import com.alipay.sofa.jraft.rhea.storage.KVIterator;
+import com.alipay.sofa.jraft.rhea.storage.KVOperation;
+import com.alipay.sofa.jraft.rhea.storage.KVState;
+import com.alipay.sofa.jraft.rhea.storage.KVStateOutputList;
 import com.alipay.sofa.jraft.rhea.storage.KVStoreAccessHelper;
 import com.alipay.sofa.jraft.rhea.storage.KVStoreClosure;
+import com.alipay.sofa.jraft.rhea.storage.KVStoreSnapshotFile;
+import com.alipay.sofa.jraft.rhea.storage.KVStoreSnapshotFileFactory;
 import com.alipay.sofa.jraft.rhea.storage.LocalLock;
 import com.alipay.sofa.jraft.rhea.storage.RawKVStore;
 import com.alipay.sofa.jraft.rhea.storage.RocksRawKVStore;
@@ -50,16 +56,19 @@ import com.alipay.sofa.jraft.rhea.storage.Sequence;
 import com.alipay.sofa.jraft.rhea.storage.SstColumnFamily;
 import com.alipay.sofa.jraft.rhea.storage.SyncKVStore;
 import com.alipay.sofa.jraft.rhea.storage.TestClosure;
+import com.alipay.sofa.jraft.rhea.storage.TestSnapshotReader;
+import com.alipay.sofa.jraft.rhea.storage.TestSnapshotWriter;
 import com.alipay.sofa.jraft.rhea.util.ByteArray;
 import com.alipay.sofa.jraft.rhea.util.Lists;
-import com.alipay.sofa.jraft.rhea.util.ZipUtil;
 import com.alipay.sofa.jraft.rhea.util.concurrent.DistributedLock;
 import com.alipay.sofa.jraft.util.BytesUtil;
+import com.alipay.sofa.jraft.util.ExecutorServiceHelper;
 
 import static com.alipay.sofa.jraft.rhea.KeyValueTool.makeKey;
 import static com.alipay.sofa.jraft.rhea.KeyValueTool.makeValue;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -71,7 +80,6 @@ import static org.junit.Assert.assertTrue;
  */
 public class RocksKVStoreTest extends BaseKVStoreTest {
 
-    private static final String SNAPSHOT_DIR     = "kv";
     private static final String SNAPSHOT_ARCHIVE = "kv.zip";
 
     @Override
@@ -169,6 +177,31 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
             assertArrayEquals(keyList.get(i), entries.get(i).getKey());
             assertArrayEquals(valueList.get(i), entries.get(i).getValue());
         }
+    }
+
+    /**
+     * Test method: {@link RocksRawKVStore#containsKey(byte[], KVStoreClosure)}
+     */
+    @Test
+    public void containsKeyTest() {
+        final byte[] key = makeKey("contains_key_test");
+        Boolean isContains = new SyncKVStore<Boolean>() {
+            @Override
+            public void execute(RawKVStore kvStore, KVStoreClosure closure) {
+                kvStore.containsKey(key, closure);
+            }
+        }.apply(this.kvStore);
+        assertFalse(isContains);
+
+        final byte[] value = makeValue("contains_key_test_value");
+        this.kvStore.put(key, value, null);
+        isContains = new SyncKVStore<Boolean>() {
+            @Override
+            public void execute(RawKVStore kvStore, KVStoreClosure closure) {
+                kvStore.containsKey(key, closure);
+            }
+        }.apply(this.kvStore);
+        assertTrue(isContains);
     }
 
     /**
@@ -304,6 +337,109 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
     }
 
     /**
+     * Test method: {@link RocksRawKVStore#getAndPut(byte[], byte[], KVStoreClosure)}
+     */
+    @Test
+    public void getAndPutTest() {
+        final byte[] key = makeKey("put_test");
+        TestClosure closure = new TestClosure();
+        this.kvStore.get(key, closure);
+        byte[] value = (byte[]) closure.getData();
+        assertNull(value);
+
+        value = makeValue("put_test_value");
+        KVStoreClosure kvStoreClosure = new BaseKVStoreClosure() {
+            @Override
+            public void run(Status status) {
+                assertEquals(status, Status.OK());
+            }
+        };
+        this.kvStore.getAndPut(key, value, kvStoreClosure);
+        assertNull(kvStoreClosure.getData());
+
+        byte[] newVal = makeValue("put_test_value_new");
+        this.kvStore.getAndPut(key, newVal, kvStoreClosure);
+        assertArrayEquals(value, (byte[]) kvStoreClosure.getData());
+    }
+
+    /**
+     * Test method: {@link RocksRawKVStore#compareAndPut(byte[], byte[], byte[], KVStoreClosure)}
+     */
+    @Test
+    public void compareAndPutTest() {
+        final byte[] key = makeKey("put_test");
+        final byte[] value = makeValue("put_test_value");
+        this.kvStore.put(key, value, null);
+
+        final byte[] update = makeValue("put_test_update");
+        KVStoreClosure kvStoreClosure = new BaseKVStoreClosure() {
+            @Override
+            public void run(Status status) {
+                assertEquals(status, Status.OK());
+            }
+        };
+        this.kvStore.compareAndPut(key, value, update, kvStoreClosure);
+        assertEquals(kvStoreClosure.getData(), Boolean.TRUE);
+        byte[] newValue = new SyncKVStore<byte[]>() {
+            @Override
+            public void execute(RawKVStore kvStore, KVStoreClosure closure) {
+                kvStore.get(key, closure);
+            }
+        }.apply(this.kvStore);
+        assertArrayEquals(update, newValue);
+
+        this.kvStore.compareAndPut(key, value, update, kvStoreClosure);
+        assertEquals(kvStoreClosure.getData(), Boolean.FALSE);
+    }
+
+    /**
+     * Test method: {@link RocksRawKVStore#batchCompareAndPut(KVStateOutputList)}
+     */
+    @Test
+    public void batchCompareAndPutTest() {
+        final KVStateOutputList kvStates = KVStateOutputList.newInstance();
+        final int batchWriteSize = RocksRawKVStore.MAX_BATCH_WRITE_SIZE + 1;
+        for (int i = 1; i <= batchWriteSize; i++) {
+            final byte[] key = makeKey("put_test" + i);
+            final byte[] value = makeValue("put_test_value" + i);
+            kvStates.add(KVState.of(KVOperation.createPut(key, value), null));
+        }
+        this.kvStore.batchPut(kvStates);
+        kvStates.clear();
+
+        for (int i = 1; i <= batchWriteSize; i++) {
+            final byte[] key = makeKey("put_test" + i);
+            final byte[] value = makeValue("put_test_value" + i);
+            final byte[] update = makeValue("put_test_update" + i);
+            KVStoreClosure kvStoreClosure = new BaseKVStoreClosure() {
+                @Override
+                public void run(Status status) {
+                    assertEquals(status, Status.OK());
+                }
+            };
+            kvStates.add(KVState.of(KVOperation.createCompareAndPut(key, update, value), kvStoreClosure));
+        }
+        this.kvStore.batchCompareAndPut(kvStates);
+        kvStates.forEach(kvState -> assertEquals(kvState.getDone().getData(), Boolean.FALSE));
+        kvStates.clear();
+
+        for (int i = 1; i <= batchWriteSize; i++) {
+            final byte[] key = makeKey("put_test" + i);
+            final byte[] value = makeValue("put_test_value" + i);
+            final byte[] update = makeValue("put_test_update" + i);
+            KVStoreClosure kvStoreClosure = new BaseKVStoreClosure() {
+                @Override
+                public void run(Status status) {
+                    assertEquals(status, Status.OK());
+                }
+            };
+            kvStates.add(KVState.of(KVOperation.createCompareAndPut(key, value, update), kvStoreClosure));
+        }
+        this.kvStore.batchCompareAndPut(kvStates);
+        kvStates.forEach(kvState -> assertEquals(kvState.getDone().getData(), Boolean.TRUE));
+    }
+
+    /**
      * Test method: {@link RocksRawKVStore#merge(byte[], byte[], KVStoreClosure)}
      */
     @Test
@@ -355,7 +491,7 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
      * Test method: {@link RocksRawKVStore#putIfAbsent(byte[], byte[], KVStoreClosure)}
      */
     @Test
-    public void putIfAbsent() {
+    public void putIfAbsentTest() {
         byte[] key = makeKey("put_if_absent_test");
         byte[] value = makeValue("put_if_absent_test_value");
         TestClosure closure = new TestClosure();
@@ -363,6 +499,43 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
         assertNull(closure.getData());
         this.kvStore.putIfAbsent(key, value, closure);
         assertArrayEquals(value, (byte[]) closure.getData());
+    }
+
+    /**
+     * Test method: {@link RocksRawKVStore#batchPutIfAbsent(KVStateOutputList)}
+     */
+    @Test
+    public void batchPutIfAbsentTest() {
+        final KVStateOutputList kvStates = KVStateOutputList.newInstance();
+        final int batchWriteSize = RocksRawKVStore.MAX_BATCH_WRITE_SIZE + 1;
+        for (int i = 1; i <= batchWriteSize; i++) {
+            final byte[] key = makeKey("put_test" + i);
+            final byte[] value = makeValue("put_test_value" + i);
+            KVStoreClosure kvStoreClosure = new BaseKVStoreClosure() {
+                @Override
+                public void run(Status status) {
+                    assertEquals(status, Status.OK());
+                }
+            };
+            kvStates.add(KVState.of(KVOperation.createPutIfAbsent(key, value), kvStoreClosure));
+        }
+        this.kvStore.batchPutIfAbsent(kvStates);
+        kvStates.forEach(kvState -> assertNull(kvState.getDone().getData()));
+        kvStates.clear();
+
+        for (int i = 1; i <= batchWriteSize; i++) {
+            final byte[] key = makeKey("put_test" + i);
+            final byte[] value = makeValue("put_test_value" + i);
+            KVStoreClosure kvStoreClosure = new BaseKVStoreClosure() {
+                @Override
+                public void run(Status status) {
+                    assertEquals(status, Status.OK());
+                }
+            };
+            kvStates.add(KVState.of(KVOperation.createPutIfAbsent(key, value), kvStoreClosure));
+        }
+        this.kvStore.batchPutIfAbsent(kvStates);
+        kvStates.forEach(kvState -> assertArrayEquals(kvState.getOp().getValue(), (byte[]) kvState.getDone().getData()));
     }
 
     /**
@@ -380,7 +553,7 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
         new Thread(() -> {
             final DistributedLock<byte[]> lock2 = new LocalLock(lockKey, 3, TimeUnit.SECONDS, this.kvStore);
             try {
-                assertTrue(!lock2.tryLock());
+                assertFalse(lock2.tryLock());
             } finally {
                 latch.countDown();
             }
@@ -442,6 +615,33 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
         assertNotNull(value);
     }
 
+    /**
+     * Test method: {@link RocksRawKVStore#delete(List, KVStoreClosure)}
+     */
+    @SuppressWarnings("unchecked")
+    @Test
+    public void deleteListTest() {
+        final List<KVEntry> entries = Lists.newArrayList();
+        final List<byte[]> keys = Lists.newArrayList();
+        for (int i = 0; i < 10; i++) {
+            final byte[] key = makeKey("batch_del_test" + i);
+            entries.add(new KVEntry(key, makeValue("batch_del_test_value")));
+            keys.add(key);
+        }
+        this.kvStore.put(entries, null);
+        this.kvStore.delete(keys, null);
+        TestClosure closure = new TestClosure();
+        this.kvStore.scan(makeKey("batch_del_test"), makeKey("batch_del_test" + 99), closure);
+        List<KVEntry> entries2 = (List<KVEntry>) closure.getData();
+        assertEquals(0, entries2.size());
+        for (int i = 0; i < keys.size(); i++) {
+            closure = new TestClosure();
+            this.kvStore.get(keys.get(i), closure);
+            byte[] value = (byte[]) closure.getData();
+            assertNull(value);
+        }
+    }
+
     @Test
     public void slowSnapshotTest() throws Exception {
         this.dbOptions.setFastSnapshot(false);
@@ -466,7 +666,18 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
         }
 
         final Region region = new Region();
-        final LocalFileMeta meta = doSnapshotSave(backupDir.getAbsolutePath(), region);
+        KVStoreSnapshotFile kvStoreSnapshotFile = KVStoreSnapshotFileFactory.getKVStoreSnapshotFile(this.kvStore);
+        final ExecutorService snapshotPool = StoreEngineHelper.createSnapshotExecutor(1, 2);
+        final TestSnapshotWriter snapshotWriter = new TestSnapshotWriter(backupDir.getAbsolutePath());
+        final CountDownLatch latch = new CountDownLatch(1);
+        final Closure done = status -> {
+            assertTrue(status.isOk());
+            latch.countDown();
+        };
+        kvStoreSnapshotFile.save(snapshotWriter, region, done, snapshotPool);
+        latch.await();
+        final LocalFileMeta meta = (LocalFileMeta) snapshotWriter.getFileMeta(SNAPSHOT_ARCHIVE);
+        assertNotNull(meta);
 
         assertNotNull(get(makeKey("1")));
 
@@ -481,7 +692,10 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
 
         assertNull(get(makeKey("1")));
 
-        doSnapshotLoad(backupDir.getAbsolutePath(), meta, region);
+        final TestSnapshotReader snapshotReader = new TestSnapshotReader(snapshotWriter.metaTable, backupDir.getAbsolutePath());
+        kvStoreSnapshotFile = KVStoreSnapshotFileFactory.getKVStoreSnapshotFile(this.kvStore);
+        final boolean ret = kvStoreSnapshotFile.load(snapshotReader, region);
+        assertTrue(ret);
 
         for (int i = 0; i < 100000; i++) {
             final String v = String.valueOf(i);
@@ -492,6 +706,7 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
         assertNull(get(makeKey("100001")));
 
         FileUtils.deleteDirectory(backupDir);
+        ExecutorServiceHelper.shutdownAndAwaitTermination(snapshotPool);
     }
 
     private byte[] get(final byte[] key) {
@@ -504,6 +719,17 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
     }
 
     @Test
+    public void syncMultiGroupSnapshotTest() throws Exception {
+        this.dbOptions.setAsyncSnapshot(false);
+        multiGroupSnapshotTest();
+    }
+
+    @Test
+    public void asyncMultiGroupSnapshotTest() throws Exception {
+        this.dbOptions.setAsyncSnapshot(true);
+        multiGroupSnapshotTest();
+    }
+
     public void multiGroupSnapshotTest() throws Exception {
         final File backupDir = new File("multi-backup");
         if (backupDir.exists()) {
@@ -511,7 +737,6 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
         }
 
         final List<Region> regions = Lists.newArrayList();
-        final List<LocalFileMeta> metas = Lists.newArrayList();
         regions.add(new Region(1, makeKey("0"), makeKey("1"), null, null));
         regions.add(new Region(2, makeKey("1"), makeKey("2"), null, null));
         regions.add(new Region(3, makeKey("2"), makeKey("3"), null, null));
@@ -526,10 +751,22 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
             this.kvStore.getSequence(makeKey(i + "_seq_test"), 10, null);
         }
 
+        KVStoreSnapshotFile kvStoreSnapshotFile = KVStoreSnapshotFileFactory.getKVStoreSnapshotFile(this.kvStore);
+        final ExecutorService snapshotPool = StoreEngineHelper.createSnapshotExecutor(1, 5);
+        final List<TestSnapshotWriter> writers = Lists.newArrayList();
         for (int i = 0; i < 4; i++) {
             final Path p = Paths.get(backupDir.getAbsolutePath(), String.valueOf(i));
-            final LocalFileMeta meta = doSnapshotSave(p.toString(), regions.get(i));
-            metas.add(meta);
+            final TestSnapshotWriter snapshotWriter = new TestSnapshotWriter(p.toString());
+            writers.add(snapshotWriter);
+            final CountDownLatch latch = new CountDownLatch(1);
+            final Closure done = status -> {
+                assertTrue(status.isOk());
+                latch.countDown();
+            };
+            kvStoreSnapshotFile.save(snapshotWriter, regions.get(i), done, snapshotPool);
+            latch.await();
+            final LocalFileMeta meta = (LocalFileMeta) snapshotWriter.getFileMeta(SNAPSHOT_ARCHIVE);
+            assertNotNull(meta);
         }
 
         this.kvStore.shutdown();
@@ -538,9 +775,12 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
         this.kvStore = new RocksRawKVStore();
         this.kvStore.init(this.dbOptions);
 
+        kvStoreSnapshotFile = KVStoreSnapshotFileFactory.getKVStoreSnapshotFile(this.kvStore);
         for (int i = 0; i < 4; i++) {
             final Path p = Paths.get(backupDir.getAbsolutePath(), String.valueOf(i));
-            doSnapshotLoad(p.toString(), metas.get(i), regions.get(i));
+            final TestSnapshotReader snapshotReader = new TestSnapshotReader(writers.get(i).metaTable, p.toString());
+            final boolean ret = kvStoreSnapshotFile.load(snapshotReader, regions.get(i));
+            assertTrue(ret);
         }
 
         for (int i = 0; i < 4; i++) {
@@ -567,42 +807,7 @@ public class RocksKVStoreTest extends BaseKVStoreTest {
         assertEquals(0L, sequence.getStartValue());
 
         FileUtils.deleteDirectory(backupDir);
-    }
-
-    private LocalFileMeta doSnapshotSave(final String path, final Region region) {
-        final String snapshotPath = Paths.get(path, SNAPSHOT_DIR).toString();
-        try {
-            final LocalFileMeta meta = KVStoreAccessHelper.saveSnapshot(this.kvStore, snapshotPath, region);
-            doCompressSnapshot(path);
-            return meta;
-        } catch (final Throwable t) {
-            t.printStackTrace();
-        }
-        return null;
-    }
-
-    public boolean doSnapshotLoad(final String path, final LocalFileMeta meta, final Region region) {
-        final String sourceFile = Paths.get(path, SNAPSHOT_ARCHIVE).toString();
-        final String snapshotPath = Paths.get(path, SNAPSHOT_DIR).toString();
-        try {
-            ZipUtil.unzipFile(sourceFile, path);
-            KVStoreAccessHelper.loadSnapshot(this.kvStore, snapshotPath, meta, region);
-            return true;
-        } catch (final Throwable t) {
-            t.printStackTrace();
-            return false;
-        }
-    }
-
-    private void doCompressSnapshot(final String path) {
-        final String outputFile = Paths.get(path, SNAPSHOT_ARCHIVE).toString();
-        try {
-            try (final ZipOutputStream out = new ZipOutputStream(new FileOutputStream(outputFile))) {
-                ZipUtil.compressDirectoryToZipFile(path, SNAPSHOT_DIR, out);
-            }
-        } catch (final Throwable t) {
-            t.printStackTrace();
-        }
+        ExecutorServiceHelper.shutdownAndAwaitTermination(snapshotPool);
     }
 
     @Test

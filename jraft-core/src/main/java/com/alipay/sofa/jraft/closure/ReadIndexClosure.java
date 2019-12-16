@@ -16,6 +16,9 @@
  */
 package com.alipay.sofa.jraft.closure;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.alipay.sofa.jraft.Closure;
 import com.alipay.sofa.jraft.Node;
 import com.alipay.sofa.jraft.Status;
@@ -26,13 +29,14 @@ import com.alipay.sofa.jraft.Status;
  * @author dennis
  */
 public abstract class ReadIndexClosure implements Closure {
+    private static final Logger LOG               = LoggerFactory.getLogger(ReadIndexClosure.class);
 
     /**
      * Invalid log index -1.
      */
-    public static final long INVALID_LOG_INDEX = -1;
-    private long             index             = INVALID_LOG_INDEX;
-    private byte[]           requestContext;
+    public static final long    INVALID_LOG_INDEX = -1;
+    private long                index             = INVALID_LOG_INDEX;
+    private byte[]              requestContext;
 
     /**
      * Called when ReadIndex can be executed.
@@ -42,7 +46,7 @@ public abstract class ReadIndexClosure implements Closure {
      * @param reqCtx the request context passed by {@link Node#readIndex(byte[], ReadIndexClosure)}.
      * @see Node#readIndex(byte[], ReadIndexClosure)
      */
-    public abstract void run(Status status, long index, byte[] reqCtx);
+    public abstract void run(final Status status, final long index, final byte[] reqCtx);
 
     /**
      * Set callback result, called by jraft.
@@ -50,7 +54,7 @@ public abstract class ReadIndexClosure implements Closure {
      * @param index  the committed index.
      * @param reqCtx the request context passed by {@link Node#readIndex(byte[], ReadIndexClosure)}.
      */
-    public void setResult(long index, byte[] reqCtx) {
+    public void setResult(final long index, final byte[] reqCtx) {
         this.index = index;
         this.requestContext = reqCtx;
     }
@@ -61,7 +65,7 @@ public abstract class ReadIndexClosure implements Closure {
      * @return returns the committed index.  returns -1 if fails.
      */
     public long getIndex() {
-        return index;
+        return this.index;
     }
 
     /**
@@ -70,11 +74,15 @@ public abstract class ReadIndexClosure implements Closure {
      * @return the request context.
      */
     public byte[] getRequestContext() {
-        return requestContext;
+        return this.requestContext;
     }
 
     @Override
-    public void run(Status status) {
-        this.run(status, this.index, this.requestContext);
+    public void run(final Status status) {
+        try {
+            run(status, this.index, this.requestContext);
+        } catch (Throwable t) {
+            LOG.error("Fail to run ReadIndexClosure with status: {}.", status, t);
+        }
     }
 }

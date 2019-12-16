@@ -37,10 +37,10 @@ import com.alipay.sofa.jraft.rhea.errors.Errors;
 import com.alipay.sofa.jraft.rhea.errors.ErrorsHelper;
 import com.alipay.sofa.jraft.rhea.options.RpcOptions;
 import com.alipay.sofa.jraft.rhea.rpc.ExtSerializerSupports;
-import com.alipay.sofa.jraft.rhea.util.ExecutorServiceHelper;
 import com.alipay.sofa.jraft.rhea.util.concurrent.CallerRunsPolicyWithReport;
 import com.alipay.sofa.jraft.rhea.util.concurrent.NamedThreadFactory;
 import com.alipay.sofa.jraft.util.Endpoint;
+import com.alipay.sofa.jraft.util.ExecutorServiceHelper;
 import com.alipay.sofa.jraft.util.Requires;
 import com.alipay.sofa.jraft.util.ThreadPoolUtil;
 
@@ -120,18 +120,8 @@ public class DefaultRheaKVRpcService implements RheaKVRpcService {
         }
     }
 
-    public boolean isSelfEndpoint(final Endpoint endpoint) {
-        return this.selfEndpoint != null && this.selfEndpoint.equals(endpoint);
-    }
-
     private <V> void internalCallAsyncWithRpc(final Endpoint endpoint, final BaseRequest request,
                                               final FailoverClosure<V> closure) {
-        if (isSelfEndpoint(endpoint)) {
-            // Can't call self with rpc
-            closure.setError(Errors.CALL_SELF_ENDPOINT_ERROR);
-            closure.run(new Status(-1, "Can't call the self endpoint: %s", endpoint));
-            return;
-        }
         final String address = endpoint.toString();
         final InvokeContext invokeCtx = ExtSerializerSupports.getInvokeContext();
         final InvokeCallback invokeCallback = new InvokeCallback() {
@@ -144,7 +134,7 @@ public class DefaultRheaKVRpcService implements RheaKVRpcService {
                     closure.run(Status.OK());
                 } else {
                     closure.setError(response.getError());
-                    closure.run(new Status(-1, "RPC failed: %s", response));
+                    closure.run(new Status(-1, "RPC failed with address: %s, response: %s", address, response));
                 }
             }
 

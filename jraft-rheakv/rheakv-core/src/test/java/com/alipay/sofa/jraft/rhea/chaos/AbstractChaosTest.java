@@ -24,8 +24,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.After;
 import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestName;
 
 import com.alipay.sofa.jraft.Status;
 import com.alipay.sofa.jraft.conf.Configuration;
@@ -39,9 +43,10 @@ import com.alipay.sofa.jraft.rhea.client.RheaKVCliService;
 import com.alipay.sofa.jraft.rhea.client.RheaKVStore;
 import com.alipay.sofa.jraft.rhea.storage.StorageType;
 import com.alipay.sofa.jraft.rhea.util.Constants;
-import com.alipay.sofa.jraft.rhea.util.ExecutorServiceHelper;
 import com.alipay.sofa.jraft.util.BytesUtil;
+import com.alipay.sofa.jraft.util.ExecutorServiceHelper;
 import com.alipay.sofa.jraft.util.NamedThreadFactory;
+import com.alipay.sofa.jraft.util.Utils;
 
 /**
  *
@@ -49,11 +54,24 @@ import com.alipay.sofa.jraft.util.NamedThreadFactory;
  */
 public abstract class AbstractChaosTest {
 
-    private static final int    LOOP_1             = Constants.AVAILABLE_PROCESSORS;
+    private static final int    LOOP_1             = Utils.cpus();
     private static final int    LOOP_2             = 20;
     private static final int    INITIAL_PEER_COUNT = 5;
     private static final int    RETRIES            = 10;
     private static final byte[] VALUE              = BytesUtil.writeUtf8("test");
+
+    @Rule
+    public TestName             testName           = new TestName();
+
+    @Before
+    public void setup() throws Exception {
+        System.out.println(">>>>>>>>>>>>>>> Start test method: " + this.testName.getMethodName());
+    }
+
+    @After
+    public void teardown() throws Exception {
+        System.out.println(">>>>>>>>>>>>>>> End test method: " + this.testName.getMethodName());
+    }
 
     @Test
     public void chaosGetTest() throws Exception {
@@ -61,14 +79,14 @@ public abstract class AbstractChaosTest {
         PeerId p1 = null;
         PeerId p2 = null;
         for (int l = 0; l < RETRIES; l++) {
-            final ExecutorService executor = Executors.newCachedThreadPool(new NamedThreadFactory("chaos-test"));
+            final ExecutorService executor = Executors.newCachedThreadPool(new NamedThreadFactory("chaos-test", true));
             final List<CompletableFuture<Boolean>> allFutures = new CopyOnWriteArrayList<>();
             try {
                 cluster = new ChaosTestCluster(TestUtil.generatePeers(INITIAL_PEER_COUNT), getStorageType(),
                         isAllowBatching(), isOnlyLeaderRead());
                 cluster.start();
 
-                // 在写入数据之前, 先移除一个节点 (node1), 后面再添加回来, 验证是否能保证读一致性
+                // Before writing data, remove a node (node1) and add it back later to verify that read consistency is guaranteed.
                 p1 = cluster.getRandomPeer();
                 cluster.removePeer(p1);
 
@@ -85,11 +103,11 @@ public abstract class AbstractChaosTest {
                     });
                 }
 
-                // 在写入数据过程中, 再移除一个节点 (node2)
+                // In the process of writing data, remove one node (node2)
                 p2 = cluster.getRandomPeer();
                 cluster.removePeer(p2);
 
-                // 等待写入全部完成
+                // Waiting for the write to be completed
                 CompletableFuture.allOf(allFutures.toArray(new CompletableFuture[0]))
                         .get(30, TimeUnit.SECONDS);
                 break;
@@ -116,14 +134,14 @@ public abstract class AbstractChaosTest {
     }
 
     private void chaosGetCheckData(final ChaosTestCluster cluster, final PeerId p2, final PeerId p1) {
-        // 随机选一个 client 验证数据一致性
+        // Randomly select a client to verify data consistency
         for (int i = 0; i < LOOP_1; i++) {
             for (int j = 0; j < LOOP_2; j++) {
                 Assert.assertArrayEquals(VALUE, cluster.getRandomStore().bGet("test_" + i + "_" + j));
             }
         }
 
-        // node2 重新加入, 并在 node2 上验证读一致性
+        // Node2 rejoins and verifies read consistency on node2
         cluster.addPeer(p2);
         for (int i = 0; i < LOOP_1; i++) {
             for (int j = 0; j < LOOP_2; j++) {
@@ -131,7 +149,7 @@ public abstract class AbstractChaosTest {
             }
         }
 
-        // node1 重新加入, 并在 node1 上验证读一致性 (node1 会从 leader 同步数据)
+        // Node1 rejoins and verifies read consistency on node1 (node1 will synchronize data from leader)
         cluster.addPeer(p1);
         for (int i = 0; i < LOOP_1; i++) {
             for (int j = 0; j < LOOP_2; j++) {
@@ -152,7 +170,7 @@ public abstract class AbstractChaosTest {
         final Configuration conf = new Configuration(peerIds);
         ChaosTestCluster cluster = null;
         for (int l = 0; l < RETRIES; l++) {
-            final ExecutorService executor = Executors.newCachedThreadPool(new NamedThreadFactory("chaos-splitting-test"));
+            final ExecutorService executor = Executors.newCachedThreadPool(new NamedThreadFactory("chaos-splitting-test", true));
             final List<Future<?>> allFutures = new CopyOnWriteArrayList<>();
             try {
                 cluster = new ChaosTestCluster(peerIds, getStorageType(),
@@ -181,7 +199,7 @@ public abstract class AbstractChaosTest {
                     throw new RuntimeException(st.toString());
                 }
 
-                // 等待写入全部完成
+                // wait for all writes finished
                 for (final Future<?> f : allFutures) {
                     f.get(30, TimeUnit.SECONDS);
                 }
@@ -213,7 +231,7 @@ public abstract class AbstractChaosTest {
     }
 
     private void chaosSplittingCheckData(final ChaosTestCluster cluster) {
-        // 随机选一个 client 验证数据一致性
+        // Randomly select a client to verify data consistency
         for (int i = 0; i < LOOP_1; i++) {
             for (int j = 0; j < LOOP_2; j++) {
                 Assert.assertArrayEquals(VALUE, cluster.getRandomStore().bGet(i + "_split_test_" + j));

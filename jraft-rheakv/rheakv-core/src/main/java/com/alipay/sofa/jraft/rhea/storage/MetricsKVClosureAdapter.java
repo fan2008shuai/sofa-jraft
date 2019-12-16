@@ -141,6 +141,10 @@ public class MetricsKVClosureAdapter implements KVStoreClosure {
                 // TODO if this is needed?
                 break;
             }
+            case KVOperation.DELETE_LIST: {
+                KVMetrics.counter(REGION_KEYS_WRITTEN, id).inc(keysCount);
+                break;
+            }
             case KVOperation.GET_SEQUENCE:
             case KVOperation.KEY_LOCK: {
                 KVMetrics.counter(REGION_KEYS_READ, id).inc();
@@ -172,6 +176,10 @@ public class MetricsKVClosureAdapter implements KVStoreClosure {
                 }
                 break;
             }
+            case KVOperation.CONTAINS_KEY: {
+                KVMetrics.counter(REGION_KEYS_READ, id).inc();
+                break;
+            }
             case KVOperation.SCAN: {
                 final List<KVEntry> data = (List<KVEntry>) getData();
                 if (data != null) {
@@ -196,6 +204,15 @@ public class MetricsKVClosureAdapter implements KVStoreClosure {
                     KVMetrics.counter(REGION_BYTES_READ, id).inc(data.length);
                 }
                 KVMetrics.counter(REGION_BYTES_WRITTEN, id).inc(this.bytesWritten);
+                break;
+            }
+            case KVOperation.COMPARE_PUT: {
+                KVMetrics.counter(REGION_KEYS_READ, id).inc();
+                final Boolean data = (Boolean) getData();
+                if (data != null && data) {
+                    KVMetrics.counter(REGION_KEYS_WRITTEN, id).inc();
+                    KVMetrics.counter(REGION_BYTES_WRITTEN, id).inc(this.bytesWritten);
+                }
                 break;
             }
         }

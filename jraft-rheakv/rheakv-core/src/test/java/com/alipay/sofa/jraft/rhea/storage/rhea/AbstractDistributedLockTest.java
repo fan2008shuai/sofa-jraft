@@ -25,14 +25,16 @@ import java.util.concurrent.TimeUnit;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestName;
 
 import com.alipay.sofa.jraft.rhea.client.RheaKVStore;
 import com.alipay.sofa.jraft.rhea.errors.InvalidLockAcquirerException;
 import com.alipay.sofa.jraft.rhea.storage.StorageType;
-import com.alipay.sofa.jraft.rhea.util.ExecutorServiceHelper;
 import com.alipay.sofa.jraft.rhea.util.concurrent.DistributedLock;
 import com.alipay.sofa.jraft.util.BytesUtil;
+import com.alipay.sofa.jraft.util.ExecutorServiceHelper;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -47,16 +49,21 @@ public abstract class AbstractDistributedLockTest extends RheaKVTestCluster {
 
     private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(4);
 
+    @Rule
+    public TestName                      testName = new TestName();
+
     public abstract StorageType getStorageType();
 
     @Before
     public void setup() throws Exception {
+        System.out.println(">>>>>>>>>>>>>>> Start test method: " + this.testName.getMethodName());
         super.start(getStorageType());
     }
 
     @After
     public void tearDown() throws Exception {
         super.shutdown();
+        System.out.println(">>>>>>>>>>>>>>> End test method: " + this.testName.getMethodName());
     }
 
     private void lockTest(final RheaKVStore store) throws Exception {
